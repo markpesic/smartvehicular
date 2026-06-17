@@ -1,0 +1,5 @@
+[console_scripts]
+drowsy-extract = src.scripts.extract_features:main
+drowsy-inference = src.scripts.run_inference:main
+drowsy-logger = src.scripts.run_logger:main
+drowsy-train = src.scripts.train_models:main

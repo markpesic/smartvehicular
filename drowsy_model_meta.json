@@ -1,0 +1,23 @@
+{
+  "feature_cols": [
+    "steer_sd",
+    "steer_range",
+    "steer_vel_sd",
+    "steer_vel_mean_abs",
+    "reversal_rate",
+    "hold_fraction",
+    "lf_hf_ratio",
+    "steering_entropy",
+    "max_abs_steer_rate",
+    "steer_rate_kurtosis",
+    "large_correction_rate"
+  ],
+  "pos_label": "drowsy",
+  "classes": [
+    0,
+    1
+  ],
+  "alpha": 0.010370000000000011,
+  "fs": 20,
+  "window_s": 15.0
+}
