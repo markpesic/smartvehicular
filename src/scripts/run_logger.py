@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 from ..modes.logger_mode import LoggerMode
 from ..client_driver import ClientDriver
+from ..input_handler import InputType
 
 
 def main() -> None:
@@ -15,6 +16,8 @@ def main() -> None:
     ap.add_argument("--traffic", type=int, default=0)
     ap.add_argument("--low", action="store_true")
     ap.add_argument("--res", default="1280x720")
+    ap.add_argument("--input", choices=["mouse", "wheel"], default="mouse", help="input device: mouse (default) or wheel")
+    ap.add_argument("--debug-axes", action="store_true", help="print live joystick axis values (for finding axis indices)")
     args: argparse.Namespace = ap.parse_args()
 
     resolution: tuple[int, int] = (800, 450) if args.low else tuple(
@@ -31,6 +34,8 @@ def main() -> None:
         town=args.town,
         traffic=args.traffic,
         resolution=resolution,
+        input_type=InputType(args.input),
+        debug_axes=args.debug_axes,
     )
     driver.run()
 

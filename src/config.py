@@ -25,6 +25,22 @@ class SteeringConfig(BaseModel):
     )
 
 
+class WheelConfig(BaseModel):
+    """Steering wheel + pedal axis mapping"""
+    steer_axis: int = Field(default=0, description="Axis index for steering")
+    throttle_axis: int = Field(default=2, description="Axis index for gas pedal")
+    brake_axis: int = Field(default=3, description="Axis index for brake pedal")
+    clutch_axis: int | None = Field(default=1, description="Axis index for clutch (None to disable)")
+    reverse_button: int = Field(default=5, description="Button index to toggle reverse")
+    steer_nonlinearity: float = Field(
+        default=0.55,
+        description="Steering curve: output = factor * tan(1.1 * input)",
+    )
+    pedal_deadzone: float = Field(
+        default=0.05, ge=0.0, le=0.3,
+        description="Ignore pedal values below this threshold",
+    )
+
 class InactivityConfig(BaseModel):
     """Tier-1 steering-inactivity early-warning thresholds."""
     steer_thresh: float = Field(
@@ -58,6 +74,7 @@ class AppConfig(BaseModel):
     """Top-level config aggregating all sub-configs."""
     sim: SimConfig = Field(default_factory=SimConfig)
     steering: SteeringConfig = Field(default_factory=SteeringConfig)
+    wheel: WheelConfig = Field(default_factory=WheelConfig)
     inactivity: InactivityConfig = Field(default_factory=InactivityConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
 

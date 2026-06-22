@@ -11,9 +11,13 @@ import carla
 
 from .config import CONFIG
 from .modes.driving_mode import DrivingMode
+from .input_handler import (
+    InputType, MouseInput, WheelInput, ControlState, create_input,
+)
+
 
 class ClientDriver:
-    """Sets up CARLA + pygame and runs the main driving loop"""
+    """Sets up CARLA + pygame and runs the main driving loop."""
 
     def __init__(
         self,
@@ -25,6 +29,8 @@ class ClientDriver:
         town: str | None = None,
         traffic: int = 0,
         resolution: tuple[int, int] = (1280, 720),
+        input_type: InputType = InputType.MOUSE,
+        debug_axes: bool = False,
     ) -> None:
         self.mode: DrivingMode = mode
         self.dw: int
@@ -41,10 +47,20 @@ class ClientDriver:
             "monospace", 48, bold=True)
         self.clock: pygame.time.Clock = pygame.time.Clock()
 
+        self.input: MouseInput | WheelInput = create_input(
+            input_type, debug_axes=debug_axes)
+        print(f"Input device: {self.input.device_name}")
+
+        # Mouse grab (only relevant for MouseInput)
         self.grabbed: bool = True
-        pygame.event.set_grab(True)
-        pygame.mouse.set_visible(False)
-        pygame.mouse.get_rel()
+        if isinstance(self.input, MouseInput):
+            pygame.event.set_grab(True)
+            pygame.mouse.set_visible(False)
+            pygame.mouse.get_rel()
+        else:
+            # Wheel doesn't need mouse capture
+            pygame.event.set_grab(False)
+            pygame.mouse.set_visible(True)
 
         self.client: carla.Client = carla.Client(carla_host, carla_port)
         self.client.set_timeout(20.0)
@@ -82,7 +98,6 @@ class ClientDriver:
 
         bp_lib: carla.BlueprintLibrary = self.world.get_blueprint_library()
 
-        # Ego vehicle
         vehicle_bp: carla.ActorBlueprint = bp_lib.filter(vehicle_type)[0]
         spawn: carla.Transform = self.spawn_points[
             np.random.randint(len(self.spawn_points))]
@@ -90,7 +105,6 @@ class ClientDriver:
             vehicle_bp, spawn)
         self.actors.append(self.vehicle)
 
-        # NPC traffic
         if traffic > 0:
             npc_bps = bp_lib.filter("vehicle.*")
             free: list[carla.Transform] = [
@@ -108,7 +122,6 @@ class ClientDriver:
                     spawned += 1
             print(f"Spawned {spawned} NPC vehicles.")
 
-        # Chase camera
         cam_bp: carla.ActorBlueprint = bp_lib.find("sensor.camera.rgb")
         cam_bp.set_attribute("image_size_x", str(self.dw))
         cam_bp.set_attribute("image_size_y", str(self.dh))
@@ -122,6 +135,7 @@ class ClientDriver:
         self.camera.listen(self.image_queue.put)
 
         self.steer: float = 0.0
+        self.steer_raw: float = 0.0
         self.throttle: float = 0.0
         self.brake: float = 0.0
         self.reverse: bool = False
@@ -130,7 +144,6 @@ class ClientDriver:
         self.start_wall: float = time.time()
 
     def run(self) -> None:
-        """Drive until ESC or window close."""
         self.mode.on_setup(self)
         running: bool = True
         try:
@@ -153,36 +166,34 @@ class ClientDriver:
                             self._respawn()
                         else:
                             self.mode.on_key(event.key, self)
+                    else:
+                        self.input.on_event(event)
+
+                if isinstance(self.input, WheelInput) and self.input.reverse_toggled:
+                    self.reverse = not self.reverse
 
                 self._update_controls()
                 self._update_vehicle_state()
-
                 self.mode.on_tick(self, snapshot)
-
                 self._render()
-
                 self.clock.tick(CONFIG.sim.hz)
         finally:
             self._shutdown()
 
     def _toggle_grab(self) -> None:
-        self.grabbed = not self.grabbed
-        pygame.event.set_grab(self.grabbed)
-        pygame.mouse.set_visible(not self.grabbed)
-        pygame.mouse.get_rel()
+        if isinstance(self.input, MouseInput):
+            self.grabbed = not self.grabbed
+            self.input.grabbed = self.grabbed
+            pygame.event.set_grab(self.grabbed)
+            pygame.mouse.set_visible(not self.grabbed)
+            pygame.mouse.get_rel()
 
     def _update_controls(self) -> None:
-        cfg = CONFIG.steering
-        if self.grabbed:
-            mdx: int
-            mdx, _ = pygame.mouse.get_rel()
-            self.steer += mdx * cfg.sensitivity
-        self.steer *= cfg.autocenter
-        self.steer = max(-1.0, min(1.0, self.steer))
-
-        keys: pygame.key.ScancodeWrapper = pygame.key.get_pressed()
-        self.throttle = 1.0 if keys[pygame.K_w] else 0.0
-        self.brake = 1.0 if (keys[pygame.K_s] or keys[pygame.K_SPACE]) else 0.0
+        ctrl: ControlState = self.input.read()
+        self.steer = ctrl.steer
+        self.steer_raw = ctrl.steer_raw
+        self.throttle = ctrl.throttle
+        self.brake = ctrl.brake
 
         control: carla.VehicleControl = carla.VehicleControl(
             throttle=float(self.throttle),
@@ -208,11 +219,12 @@ class ClientDriver:
         self.vehicle.set_transform(sp)
         self.vehicle.set_target_velocity(carla.Vector3D(0, 0, 0))
         self.steer = 0.0
+        if isinstance(self.input, MouseInput):
+            self.input.reset_steer()
         if hasattr(self.mode, "on_respawn"):
             self.mode.on_respawn()
 
     def _render(self) -> None:
-        # Camera image
         try:
             image: carla.Image = self.image_queue.get(timeout=2.0)
             arr: np.ndarray = np.frombuffer(image.raw_data, dtype=np.uint8)
@@ -223,12 +235,9 @@ class ClientDriver:
         except queue.Empty:
             pass
 
-        # Warning overlays
         warning_type: str | None
         warning_type, _ = self.mode.get_warning_state()
         self._draw_warning_overlay(warning_type)
-
-        # HUD
         self._draw_hud()
         pygame.display.flip()
 
@@ -246,7 +255,7 @@ class ClientDriver:
             # txt: pygame.Surface = self.font_big.render(
             #     "WAKE UP!", True, (255, 200, 0))
             # self.display.blit(
-                # txt, txt.get_rect(center=(dw // 2, dh // 2 - 40)))
+            #     txt, txt.get_rect(center=(dw // 2, dh // 2 - 40)))
 
         elif warning_type == "DROWSY":
             overlay = pygame.Surface((dw, dh), pygame.SRCALPHA)
@@ -261,13 +270,17 @@ class ClientDriver:
 
     def _draw_hud(self) -> None:
         elapsed: float = time.time() - self.start_wall
+        input_tag: str = self.input.input_type_str
         base_lines: list[str] = [
             f"t={elapsed:5.0f}s  speed={self.speed_kmh:5.1f} km/h"
-            f"  steer={self.steer:+.2f}",
+            f"  steer={self.steer:+.2f}  [{input_tag}]",
         ]
         mode_lines: list[str] = self.mode.get_hud_lines(self)
         controls: str = (
-            "mouse=steer W/S=pedals R=reverse G=mouse TAB=respawn ESC=quit")
+            "W/S=pedals R=reverse G=mouse TAB=respawn ESC=quit"
+            if isinstance(self.input, MouseInput)
+            else "pedals=gas/brake R=reverse TAB=respawn ESC=quit"
+        )
         all_lines: list[str] = base_lines + mode_lines + [controls]
 
         for i, line in enumerate(all_lines):
